@@ -1,0 +1,39 @@
+parser: '@typescript-eslint/parser'
+env:
+  browser: true
+  commonjs: true
+  es6: true
+  screeps/screeps: true
+extends: 
+  - 'eslint:recommended'
+  - 'plugin:@typescript-eslint/recommended'
+globals:
+  Atomics: readonly
+  SharedArrayBuffer: readonly
+  Cache: writable
+  Log: writable
+  T: writable
+  PIXEL: readonly
+  CPU_UNLOCK: readonly
+  PServ: readonly
+  describe: readonly
+  it: readonly
+  beforeEach: readonly
+  afterEach: readonly
+  MemoryCache: writable
+  StructureFactory: writable
+  Tmp: writable
+parserOptions:
+  ecmaVersion: 2018
+rules:
+  prefer-const: error
+  semi: [error, never]
+  quotes: error
+  indent: error
+  no-shadow: off
+  '@typescript-eslint/no-shadow': [error]
+  prefer-rest-params: off
+plugins:
+  - 'screeps'
+  - '@typescript-eslint'
+

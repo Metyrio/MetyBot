@@ -1,0 +1,70 @@
+name: Test & Deploy
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [17.x]
+    steps:
+    - uses: actions/checkout@v1
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v1
+      with:
+        node-version: ${{ matrix.node-version }}
+    - name: npm install
+      run: |
+        npm ci
+    - name: eslint checks
+      run: |
+        npm run lint
+    - name: npm test
+      run: |
+        npx tsc
+        npm test
+    - name: Coverage test
+      run: |
+        npm run coverage
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [17.x]
+    needs: test
+    if: github.ref == 'refs/heads/master'
+    steps:
+    - uses: actions/checkout@v1
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v1
+      with:
+        node-version: ${{ matrix.node-version }}
+    - name: npm install
+      run: |
+        npm ci
+    - name: Build
+      run: |
+        npx tsc
+        npm run roll
+    - name: Get API Keys
+      uses: nowactions/envsubst@v1
+      with:
+        input: ./screepsNoCreds.yml
+        output: ./.screeps.yml
+      env:
+        MMO_TOKEN: ${{ secrets.MMO_TOKEN }}
+        BOTARENA_PASS: ${{ secrets.BOTARENA_PASS }}
+        SCREEPS_USER: ${{ secrets.SCREEPS_USER }}
+        PTR_TOKEN:  ${{ secrets.MMO_TOKEN }}
+        SEASON_TOKEN: ${{ secrets.MMO_TOKEN }}
+        FILEY_FOOD_TOKEN: ${{ secrets.FILEY_FOOD_TOKEN }}
+    - name: Deploy
+      run: |
+        npm run push
+        npm run season
+        npm run ptr
+        npm run fileyfood500
+        npm run swc
+        npm run botarena
+        npm run splus2

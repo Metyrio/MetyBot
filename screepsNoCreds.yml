@@ -1,0 +1,37 @@
+servers:
+  main:
+    host: screeps.com
+    secure: true
+    token: '$MMO_TOKEN'
+  ptr:
+    host: screeps.com
+    secure: true
+    token: '$PTR_TOKEN'
+    ptr: true
+  swc:
+    host: 68.68.28.20
+    secure: false
+    port: 21025
+    username: '$SCREEPS_USER'
+    password: '$BOTARENA_PASS'
+  botarena:
+    host: botarena.screepspl.us
+    secure: true
+    port: 443
+    username: '$SCREEPS_USER'
+    password: '$BOTARENA_PASS'
+  splus2:
+    host: server2.screepspl.us
+    secure: true
+    port: 443
+    username: '$SCREEPS_USER'
+    password: '$BOTARENA_PASS'
+  season:
+    host: screeps.com
+    secure: true
+    token: '$SEASON_TOKEN'
+    path: /season
+  fileyfood500:
+    host: screeps.com
+    secure: true
+    token: $FILEY_FOOD_TOKEN
