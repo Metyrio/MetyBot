@@ -62,8 +62,14 @@ function getRecipe(type: cN, energyAvailable: number, room: Room, boostTier?: nu
     Log.error(`No recipe found for ${type} in ${room.name} with ${energy} energy`)
     return [MOVE]
 }
-function body(counts: number[], order: BodyPartConstant[]) { // order is list of types from move, work, attack, store, heal, ranged, tough, claim
-    // assert counts.length == order.length
+function body(counts: number[], order: BodyPartConstant[]) {
+    // ? FIX: Validate counts are all positive before creating arrays
+    for (let i = 0; i < counts.length; i++) {
+        if (counts[i] < 0) {
+            Log.error(`Invalid body count: ${counts[i]} at index ${i} for body parts ${JSON.stringify(order)}`)
+            counts[i] = 0  // Set to 0 instead of negative
+        }
+    }
     const nestedPartsLists: BodyPartConstant[][] = _.map(counts, (count, index) => Array(count).fill(order[index]))
     return _.flatten(nestedPartsLists)
 }
@@ -216,7 +222,10 @@ function upgraderBody(energyAvailable, rcl, room) {
         if (controller.progressTotal - controller.progress > 40000) {
             //make a static upgrader
             const carries = rcl == 7 ? 2 : 1
-            const works = Math.min(Math.floor((energyAvailable - (BODYPART_COST[CARRY] * carries)) / BODYPART_COST[WORK]), MAX_CREEP_SIZE - carries)
+            const works = Math.min(
+                Math.floor((energyAvailable - (BODYPART_COST[CARRY] * carries)) / BODYPART_COST[WORK]), 
+                Math.max(1, MAX_CREEP_SIZE - carries)  // ? FIX: Ensure works is at least 1
+            )
             return body([works, carries], [WORK, CARRY])
         }
     }
