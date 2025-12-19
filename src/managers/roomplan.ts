@@ -71,15 +71,35 @@ const p = {
         const centerPoint = parseInt(Object.keys(candidates)[0])
 
         if(!center.sourceDistance){
-            //TODO sources should be map from src
             const sources = [u.unpackPos(Object.values(roomData.src)[0], roomName), u.unpackPos(Object.values(roomData.src)[1], roomName)]
             const realPos = new RoomPosition(Math.floor(centerPoint/50), centerPoint%50, roomName)
-            center.sourceDistance = PathFinder.search(realPos, {pos: sources[0], range: 1}, {plainCost: 1, swampCost: 1}).cost +
-                PathFinder.search(realPos, {pos: sources[1], range: 1}, {plainCost: 1, swampCost: 1}).cost
+            
+            // Cache PathFinder results for room scoring
+            const roomCache = u.getRoomCache(roomName)
+            const pathCacheKey1 = `path_${centerPoint}_${Object.keys(roomData.src)[0]}`
+            const pathCacheKey2 = `path_${centerPoint}_${Object.keys(roomData.src)[1]}`
+            
+            if(!roomCache[pathCacheKey1]){
+                roomCache[pathCacheKey1] = PathFinder.search(realPos, {pos: sources[0], range: 1}, {plainCost: 1, swampCost: 1}).cost
+            }
+            if(!roomCache[pathCacheKey2]){
+                roomCache[pathCacheKey2] = PathFinder.search(realPos, {pos: sources[1], range: 1}, {plainCost: 1, swampCost: 1}).cost
+            }
+            
+            center.sourceDistance = roomCache[pathCacheKey1] + roomCache[pathCacheKey2]
         }
         if(!center.controllerDistance){
             const controllerPos = u.unpackPos(roomData.ctrlP, roomName)
-            center.controllerDistance = PathFinder.search(new RoomPosition(Math.floor(centerPoint/50), centerPoint%50, roomName), {pos: controllerPos, range: 1}, {plainCost: 1, swampCost: 1}).cost
+            
+            // Cache PathFinder result for controller distance
+            const roomCache = u.getRoomCache(roomName)
+            const pathCacheKey = `path_${centerPoint}_ctrl`
+            
+            if(!roomCache[pathCacheKey]){
+                roomCache[pathCacheKey] = PathFinder.search(new RoomPosition(Math.floor(centerPoint/50), centerPoint%50, roomName), {pos: controllerPos, range: 1}, {plainCost: 1, swampCost: 1}).cost
+            }
+            
+            center.controllerDistance = roomCache[pathCacheKey]
         }
 
         const controllerScore = center.controllerDistance < levelNeeded + template.wallDistance ? 5 : Math.max(25 - center.controllerDistance, 0)
@@ -90,13 +110,25 @@ const p = {
     },
 
     narrowBySourcePos: function(candidates: _.Dictionary<CandidateData>, roomData, roomName){
-        //TODO sources should be map from src
         const sources = [u.unpackPos(Object.values(roomData.src)[0], roomName), u.unpackPos(Object.values(roomData.src)[1], roomName)]
+        const roomCache = u.getRoomCache(roomName)
+        
         for(const pos of Object.keys(candidates)){
             const intPos = parseInt(pos)
             const realPos = new RoomPosition(Math.floor(intPos/50), intPos%50, roomName)
-            candidates[pos].sourceDistance = PathFinder.search(realPos, {pos: sources[0], range: 1}, {plainCost: 1, swampCost: 1}).cost +
-                PathFinder.search(realPos, {pos: sources[1], range: 1}, {plainCost: 1, swampCost: 1}).cost
+            
+            // Cache PathFinder results per candidate position
+            const pathCacheKey1 = `path_${intPos}_${Object.keys(roomData.src)[0]}`
+            const pathCacheKey2 = `path_${intPos}_${Object.keys(roomData.src)[1]}`
+            
+            if(!roomCache[pathCacheKey1]){
+                roomCache[pathCacheKey1] = PathFinder.search(realPos, {pos: sources[0], range: 1}, {plainCost: 1, swampCost: 1}).cost
+            }
+            if(!roomCache[pathCacheKey2]){
+                roomCache[pathCacheKey2] = PathFinder.search(realPos, {pos: sources[1], range: 1}, {plainCost: 1, swampCost: 1}).cost
+            }
+            
+            candidates[pos].sourceDistance = roomCache[pathCacheKey1] + roomCache[pathCacheKey2]
         }
         const bestSourceDist = _.min(candidates, "sourceDistance").sourceDistance
         for(const pos of Object.keys(candidates)){
@@ -107,9 +139,19 @@ const p = {
 
     narrowByControllerPos: function(candidates: _.Dictionary<CandidateData>, roomData, roomName, levelNeeded){
         const controllerPos = u.unpackPos(roomData.ctrlP, roomName)
+        const roomCache = u.getRoomCache(roomName)
+        
         for(const pos of Object.keys(candidates)){
             const intPos = parseInt(pos)
-            candidates[pos].controllerDistance = PathFinder.search(new RoomPosition(Math.floor(intPos/50), intPos%50, roomName), {pos: controllerPos, range: 1}, {plainCost: 1, swampCost: 1}).cost
+            
+            // Cache PathFinder result per candidate position
+            const pathCacheKey = `path_${intPos}_ctrl`
+            
+            if(!roomCache[pathCacheKey]){
+                roomCache[pathCacheKey] = PathFinder.search(new RoomPosition(Math.floor(intPos/50), intPos%50, roomName), {pos: controllerPos, range: 1}, {plainCost: 1, swampCost: 1}).cost
+            }
+            
+            candidates[pos].controllerDistance = roomCache[pathCacheKey]
         }
         const topCandidates = _.filter(candidates, pos => pos.controllerDistance >= levelNeeded + template.wallDistance)
         if(topCandidates.length){
@@ -305,6 +347,39 @@ const p = {
             || roomInfo.sT && roomInfo.sT > Game.time
             || roomInfo.d >= 4) 
             return -1
+        
+        // ? CHECK: Are exits blocked by walls/ramparts? (abandoned rooms)
+        // This prevents adding rooms that are inaccessible due to player-built walls
+        if(Game.rooms[roomName]){
+            const room = Game.rooms[roomName]
+            // Only check if room has NO owner/reservation (abandoned)
+            if(!room.controller || (!room.controller.owner && !room.controller.reservation)){
+                // Check if hostile structures exist (walls/ramparts from old player)
+                const hostileStructures = room.find(FIND_HOSTILE_STRUCTURES)
+                if(hostileStructures.length > 0){
+                    // Check if ANY structure blocks pathfinding
+                    const testPos = new RoomPosition(25, 25, roomName)
+                    const testPath = PathFinder.search(spawn.pos, {pos: testPos, range: 20}, {
+                        plainCost: 1,
+                        swampCost: 1,
+                        maxOps: 10000,
+                        roomCallback: function(rN){
+                            const safe = Memory.remotes[rN] 
+                                || (Cache.roomData[rN] && Cache.roomData[rN].own == settings.username)
+                                || u.isHighway(rN)
+                                || rN == roomName
+                            if(!safe) return false
+                        }
+                    })
+                    // If can't reach center of room, it's blocked
+                    if(testPath.incomplete){
+                        Log.info(`Remote candidate ${roomName} rejected: exits blocked by structures`)
+                        return -1
+                    }
+                }
+            }
+        }
+        
         let totalDistance = 0
         for(const source in roomInfo.src){
             const sourcePos = u.unpackPos(roomInfo.src[source], roomName)
@@ -333,8 +408,24 @@ const p = {
     },
 
     removeRemote: function(roomName, room){
-        delete Memory.remotes[roomName]
+        // ? CHECK: Multi-spawn edge case
+        // Don't delete Memory.remotes if other spawns still use this remote
+        const stillInUse = _.some(Game.spawns, otherSpawn => 
+            otherSpawn.name != room + "0" &&
+            otherSpawn.memory && // ? Check memory exists
+            otherSpawn.memory.sources &&
+            _.some(otherSpawn.memory.sources, s => s.roomName == roomName)
+        )
+        
+        if(!stillInUse){
+            delete Memory.remotes[roomName]
+        } else {
+            Log.info(`Remote ${roomName} still in use by other spawns, keeping Memory.remotes entry`)
+        }
+        
         const memory = Memory.spawns[room + "0"]
+        if(!memory || !memory.sources) return
+        
         for(const sourceId in memory.sources){
             if(memory.sources[sourceId].roomName == roomName)
                 delete memory.sources[sourceId]
@@ -726,7 +817,7 @@ const p = {
                 continue
             }
             const creeps = source.pos.findInRange(FIND_MY_CREEPS, 1)
-            const miner = _.find(creeps, c => c.memory.source = source.id)
+            const miner = _.find(creeps, c => c.memory.source == source.id)
             if(!miner)
                 continue
             let location = null
@@ -734,7 +825,7 @@ const p = {
                 if(location)
                     break
                 for(let j = miner.pos.y - 1; j <= miner.pos.y + 1; j++){
-                    if(miner.pos.isEqualTo(i,j) || i <= 2 || j <= 2)
+                    if(miner.pos.isEqualTo(i,j) || i <= 2 || j <= 2 || i >= 47 || j >= 47)
                         continue
                     const look = room.lookAt(i, j)
                     let go = true
