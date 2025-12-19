@@ -108,11 +108,47 @@ export function loop() {
         //gather homeless creeps
         if(Game.time % 50 == 1){
             _.forEach(Game.creeps, function(creep) {
+                // ? Enhanced recovery: Try to recover role from name
                 if(!creep.memory.role){
-                    creep.memory.role = creep.name.split("-")[0] as cN
+                    const roleName = creep.name.split("-")[0]
+                    // Validate it's a real role
+                    const allRoles = rr.getRoles()
+                    const validRole = _.find(allRoles, r => r.name == roleName)
+                    if(validRole){
+                        creep.memory.role = roleName as cN
+                        // Set basic memory fields if missing
+                        if(!creep.memory.spawnTime){
+                            creep.memory.spawnTime = creep.body.length * CREEP_SPAWN_TIME
+                        }
+                        if(!creep.memory.spawnTick){
+                            creep.memory.spawnTick = Game.time - (CREEP_LIFE_TIME - (creep.ticksToLive || CREEP_LIFE_TIME))
+                        }
+                        Log.warning(`Recovered corrupt creep ${creep.name} with role ${roleName}`)
+                    } else {
+                        // Unknown role - suicide
+                        Log.error(`Creep ${creep.name} has invalid role ${roleName}, suiciding`)
+                        creep.suicide()
+                        return
+                    }
                 }
                 if(!creep.memory.city){
-                    creep.memory.city = "homeless"
+                    // ? Try to find nearest spawn
+                    const spawns = Object.values(Game.spawns)
+                    if(spawns.length > 0){
+                        let nearestSpawn = spawns[0]
+                        let minDist = Infinity
+                        for(const spawn of spawns) {
+                            const dist = creep.pos.getRangeTo(spawn.pos)
+                            if(dist < minDist) {
+                                minDist = dist
+                                nearestSpawn = spawn
+                            }
+                        }
+                        creep.memory.city = nearestSpawn.name
+                        Log.warning(`Recovered creep ${creep.name} city: ${nearestSpawn.name}`)
+                    } else {
+                        creep.memory.city = "homeless"
+                    }
                     creep.memory.mode = 0
                 }
             })

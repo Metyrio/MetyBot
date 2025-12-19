@@ -30,24 +30,33 @@ const centralSpawn = {
         if (!spawn) return false
     
         Memory.counter++
+        
+        // ? CRITICAL FIX: Set memory BEFORE spawning to survive code reload
+        if(!Memory.creeps[name]) {
+            Memory.creeps[name] = {} as CreepMemory
+        }
+        Memory.creeps[name].role = role.name
+        Memory.creeps[name].mode = role.target
+        Memory.creeps[name].target = role.target as unknown as Id<RoomObject>
+        Memory.creeps[name].city = city
+        Memory.creeps[name].needBoost = boostTier > 0
+        Memory.creeps[name].boostTier = boostTier
+        Memory.creeps[name].flag = flag
+        Memory.creeps[name].spawnTime = recipe.length * CREEP_SPAWN_TIME
+        Memory.creeps[name].spawnTick = Game.time
+        
         const result = spawn.spawnCreep(recipe, name)
         if (result) { // don't spawn and throw an error at the end of the tick
             e.reportError(new Error(`Error making ${role.name} in ${city}: ${result}`))
+            // ? Clean up pre-set memory on spawn failure
+            delete Memory.creeps[name]
             return false
         }
         if (boostTier > 0) {
             const boostsNeeded = boosts.getBoostsForRank(role.actions, boostTier)
             roomU.requestBoosterFill(Game.spawns[city], boostsNeeded)
         }
-        Game.creeps[name].memory.role = role.name
-        Game.creeps[name].memory.mode = role.target
-        Game.creeps[name].memory.target = role.target as unknown as Id<RoomObject>
-        Game.creeps[name].memory.city = city
-        Game.creeps[name].memory.needBoost = boostTier > 0 //TODO: remove
-        Game.creeps[name].memory.boostTier = boostTier
-        Game.creeps[name].memory.flag = flag
-        Game.creeps[name].memory.spawnTime = recipe.length * CREEP_SPAWN_TIME
-        Game.creeps[name].memory.spawnTick = Game.time
+        // Memory is already set above - no need to set again here
         return true
     },
 

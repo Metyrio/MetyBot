@@ -552,19 +552,27 @@ function updateRepairer(spawn, memory: SpawnMemory, creeps){
         const room = Game.rooms[remoteName]
         if(!room || (room.controller && room.controller.owner)) continue
         
-        // Cache construction sites and damaged roads per remote room
+        // ? Cache construction sites and damaged roads per remote room
+        // ? Fast refresh (10 ticks) for sites, slow refresh (50 ticks) for roads
         if (!Tmp[remoteName]) {
             Tmp[remoteName] = {}
         }
-        if (!Tmp[remoteName].repairerData || Game.time % 50 == 0) {
+        if (!Tmp[remoteName].repairerData || Game.time % 10 == 0) {
             const sites = room.find(FIND_MY_CONSTRUCTION_SITES)
-            const structures = room.find(FIND_STRUCTURES)
             let damagedCount = 0
-            for (const s of structures) {
-                if (s.structureType == STRUCTURE_ROAD && s.hits/s.hitsMax < 0.3) {
-                    damagedCount++
+            
+            // Only check roads every 50 ticks (roads decay slowly)
+            if (!Tmp[remoteName].repairerStructures || Game.time % 50 == 0) {
+                const structures = room.find(FIND_STRUCTURES)
+                Tmp[remoteName].repairerStructures = []
+                for (const s of structures) {
+                    if (s.structureType == STRUCTURE_ROAD && s.hits/s.hitsMax < 0.3) {
+                        Tmp[remoteName].repairerStructures.push(s)
+                    }
                 }
             }
+            damagedCount = Tmp[remoteName].repairerStructures.length
+            
             Tmp[remoteName].repairerData = {
                 sites: sites.length,
                 damaged: damagedCount
@@ -584,7 +592,7 @@ function updateBuilder(rcl, memory, spawn: StructureSpawn, creeps: [Creep]) {
     const room = spawn.room
     const roomName = room.name
     
-    // Cache construction sites
+    // ? Cache construction sites (refresh every 10 ticks for good reactivity)
     if (!Tmp[roomName]) {
         Tmp[roomName] = {}
     }
@@ -596,7 +604,7 @@ function updateBuilder(rcl, memory, spawn: StructureSpawn, creeps: [Creep]) {
     const storage = roomU.getStorage(room) as StructureStorage | StructureContainer | StructureSpawn
     let totalSites
     if (rcl < 4) {
-        // Cache repair sites
+        // ? Cache repair sites (refresh every 20 ticks - structures don't decay that fast)
         if (!Tmp[roomName].builderRepairSites || Game.time % 20 == 0) {
             const structures = room.find(FIND_STRUCTURES)
             Tmp[roomName].builderRepairSites = []
@@ -615,7 +623,12 @@ function updateBuilder(rcl, memory, spawn: StructureSpawn, creeps: [Creep]) {
         if(storage.structureType == STRUCTURE_CONTAINER){
             //make builders based on quantity of carried energy in room
             let energyStore = storage.store.energy
-            for(const c of creeps){
+            
+            // ? Cache creep filtering for energy calculation
+            if (!Tmp[roomName].builderCreeps || Game.time % 5 == 0) {
+                Tmp[roomName].builderCreeps = creeps
+            }
+            for(const c of Tmp[roomName].builderCreeps){
                 energyStore += c.store.energy
             }
             const upgraders = _.filter(creeps, c => c.memory.role == cN.UPGRADER_NAME).length
@@ -627,7 +640,7 @@ function updateBuilder(rcl, memory, spawn: StructureSpawn, creeps: [Creep]) {
         }
     }
     if(rcl >= 4 && Game.cpu.bucket > settings.bucket.repair + settings.bucket.range * cityFraction(room.name) && spawn.room.storage && spawn.room.storage.store[RESOURCE_ENERGY] > settings.energy.repair){
-        // Cache walls
+        // ? Cache walls (refresh every 100 ticks - walls change slowly)
         if (!Tmp[roomName].builderWalls || Game.time % 100 == 0) {
             const structures = spawn.room.find(FIND_STRUCTURES)
             Tmp[roomName].builderWalls = []
@@ -655,14 +668,14 @@ function updateBuilder(rcl, memory, spawn: StructureSpawn, creeps: [Creep]) {
             }
         }
         
-        // Cache nukes
+        // ? Cache nukes (refresh every 50 ticks - nukes don't appear often)
         if (!Tmp[roomName].builderNukes || Game.time % 50 == 0) {
             Tmp[roomName].builderNukes = spawn.room.find(FIND_NUKES)
         }
         const nukes = Tmp[roomName].builderNukes
         
         if(nukes.length){
-            // Cache nuke structures
+            // ? Cache nuke structures (same refresh as nukes)
             if (!Tmp[roomName].nukeStructures || Game.time % 50 == 0) {
                 const structures = spawn.room.find(FIND_MY_STRUCTURES)
                 Tmp[roomName].nukeStructures = []
@@ -703,7 +716,17 @@ function updateRunner(creeps: Creep[], spawn, extensions, memory, rcl, emergency
     if (rcl == 8 && !emergencyTime && Game.cpu.bucket < settings.bucket.mineralMining) {
         return
     }
-    const miners = _.filter(creeps, creep => creep.memory.role == cN.REMOTE_MINER_NAME && !creep.memory.link)
+    
+    // ? Cache miner filtering (refresh every 10 ticks - miners change infrequently)
+    const roomName = spawn.room.name
+    if (!Tmp[roomName]) {
+        Tmp[roomName] = {}
+    }
+    if (!Tmp[roomName].runnerMiners || Game.time % 10 == 0) {
+        Tmp[roomName].runnerMiners = _.filter(creeps, creep => creep.memory.role == cN.REMOTE_MINER_NAME && !creep.memory.link)
+    }
+    const miners = Tmp[roomName].runnerMiners
+    
     const minRunners = rcl < 7 ? 2 : 0
     const distances = _.map(miners, miner => PathFinder.search(spawn.pos, miner.pos).cost)
     let totalDistance = _.sum(distances)

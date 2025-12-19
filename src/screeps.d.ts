@@ -284,32 +284,165 @@ declare global {
         creepMemByCity?: _.Dictionary<CreepMemory[]>
         myCities?: Room[]
         nuked?: boolean
+        pickupReservations?: {
+            [id: string]: number
+        }
+        swaps?: {
+            [key: string]: boolean
+        }
     }
     interface TmpDict {
         [name: string]: {
+            // Attack tracking
             attacks?: Array<AttackData>
             juicers?: number
             juicersNeeded?: number
-
+            
+            // Motion system caching
+            motionStructures?: Structure[]
+            motionSites?: ConstructionSite[]
+            motionCreeps?: Creep[]
+            motionPowerCreeps?: PowerCreep[]
+            noviceWallRooms?: { [roomName: string]: RoomPosition[] }
+            retreatCreeps?: Creep[]
+            
+            // City manager caching
+            cityStructures?: Structure[]
+            towers?: StructureTower[]
+            injuredCreeps?: Array<Creep | PowerCreep>
+            towerRepairStructures?: Structure[]
+            builderSites?: ConstructionSite[]
+            builderRepairSites?: Structure[]
+            builderWalls?: Structure[]
+            builderCreeps?: Creep[]
+            builderNukes?: Nuke[]
+            nukeStructures?: Structure[]
+            remoteSources?: Source[]
+            skMinerals?: Mineral[]
+            invaderCoreCheck?: number
+            hasInvaderCore?: boolean
+            powerCreepCheck?: number
+            hasPowerCreep?: boolean
+            repairerData?: {
+                sites: number
+                damaged: number
+            }
+            runnerMiners?: Creep[]
+            
+            // Role-specific caching
+            linkStructures?: Structure[]
+            repairStructures?: Structure[]
+            wallStructures?: Structure[]
+            nukeCheck?: number
+            nukes?: Nuke[]
+            ferryCheck?: number
+            hasFerries?: boolean
+            powerSpawn?: Id<StructurePowerSpawn>
+            factory?: Id<StructureFactory>
+            nuker?: Id<StructureNuker>
+            mineralInfo?: Id<Mineral> | null
+            mineralHostiles?: Array<Creep | PowerCreep>
+            mineralHostileCheck?: number
+            skLairCheck?: number
+            skLairDanger?: boolean
+            hostileCheck?: number
+            nearHostiles?: Array<Creep | PowerCreep>
+            lairCheck?: number
+            dangerLair?: boolean
+            runnerRooms?: string[]
+            repairerSites?: ConstructionSite[]
+            repairerStructures?: Structure[]
+            pulleeCheck?: number
+            availablePullees?: Creep[]
+            potentialPullees?: Creep[]
+            parkingStructures?: Structure[]
+            transporterStructures?: Structure[]
+            transporterCount?: number
+            upgraderConstruction?: ConstructionSite[]
+            upgraders?: Creep[]
+            siegeCheck?: number
+            siege?: boolean
+            
+            // Utils caching
+            hostileCreeps?: Array<Creep | PowerCreep>
+            hostileCreepsCheck?: number
+            friendlyCreeps?: Array<Creep | PowerCreep>
+            friendlyCreepsCheck?: number
+            hostileStructures?: Structure[]
+            hostileStructuresCheck?: number
         }
     }
+    
     interface AttackData {
         x: number
         y: number
         damage: number
     }
+    
+    interface SwapHistoryEntry {
+        partnerId: string
+        time: number
+    }
+    
+    interface AvoidPosition {
+        pos: RoomPosition
+        until: number
+    }
 
-    interface Log { [name: string]: (name: string) => void }
+    interface Log { 
+        [name: string]: (name: string) => void 
+    }
+    
     interface Position {
         x?: number
         y?: number
     }
+    
     // Only defined in screeps sim
     var performance: Performance
     interface Performance {
         now: () => number
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
