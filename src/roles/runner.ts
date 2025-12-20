@@ -14,6 +14,12 @@ const rR = {
     target: 0,
 
     run: function(creep: Creep) {
+        // ? DEBUG: Comprehensive state logging every tick for problematic runners
+        const shouldLog = creep.memory.tug || Game.time % 10 == 0
+        if(shouldLog){
+            Log.info(`[RUNNER] ${creep.name} T${Game.time} | tug:${creep.memory.tug} pullee:${creep.memory.pullee ? "YES" : "NO"} mode:${creep.memory.mode} targetId:${creep.memory.targetId ? "YES" : "NO"} store:${creep.store.energy}/${creep.store.getCapacity()}`)
+        }
+        
         if (creep.memory.flag && creep.memory.flag.includes("powerMine")){
             rR.runPower(creep)
             return
@@ -25,13 +31,19 @@ const rR = {
         if (creep.memory.juicer && rR.runController(creep)){
             return
         }
-        // ? FIX: Check tug status - if tug is complete (false), continue to normal tasks
+        // ? FIX: Check tug status - if tug is complete (false), clear tug memory and continue to normal tasks
         if (creep.memory.tug){
+            if(shouldLog) Log.info(`[RUNNER] ${creep.name} | Calling runTug()`)
             const tugInProgress = rR.runTug(creep)
+            if(shouldLog) Log.info(`[RUNNER] ${creep.name} | runTug returned: ${tugInProgress}`)
             if(tugInProgress){
                 return  // Only return if tug is still in progress
             }
-            // If tug completed (returned false), fall through to normal tasks
+            // ? FIX: Tug completed or failed - clear ALL tug-related memory
+            if(shouldLog) Log.info(`[RUNNER] ${creep.name} | Tug completed/failed, clearing tug memory`)
+            creep.memory.tug = false
+            creep.memory.pullee = null
+            // Fall through to normal tasks
         }
         if (Game.cpu.bucket > 9500 || Game.time % 2) {
             actions.notice(creep)
@@ -39,23 +51,38 @@ const rR = {
         if(creep.memory.mode == 1 && creep.store.getUsedCapacity() == 0)
             creep.memory.mode = 0
         if(creep.memory.mode == 0 && creep.store.getFreeCapacity() < 0.5 * creep.store.getCapacity()){
+            if(shouldLog) Log.info(`[RUNNER] ${creep.name} | Mode switch 0->1 (store > 50%)`)
             creep.memory.mode = 1
             creep.memory.targetId = null
         }
         if(creep.memory.mode == 0 && !creep.memory.targetId){
+            if(shouldLog) Log.info(`[RUNNER] ${creep.name} | Checking for pullees`)
             rR.checkForPullees(creep)
-            if(creep.memory.tug)
+            if(creep.memory.tug){
+                if(shouldLog) Log.info(`[RUNNER] ${creep.name} | Found pullee, starting tug`)
                 return
+            }
         }
         if (creep.memory.mode == 0) {
+            if(shouldLog) Log.info(`[RUNNER] ${creep.name} | Mode 0: Calling pickup()`)
             if(!rR.pickup(creep)){
-                if(!rR.runController(creep)){
+                if(shouldLog) Log.info(`[RUNNER] ${creep.name} | pickup() returned false, energy:${creep.store.energy}`)
+                // ? FIX: Only call runController if runner has SOME energy
+                // This prevents runners from going to upgrader link immediately after emptying a container
+                if(creep.store.energy > 0 && !rR.runController(creep)){
+                    if(shouldLog) Log.info(`[RUNNER] ${creep.name} | runController() returned false, parking`)
+                    rR.parkRunner(creep)
+                } else if(creep.store.energy == 0){
+                    if(shouldLog) Log.info(`[RUNNER] ${creep.name} | Empty, parking`)
                     rR.parkRunner(creep)
                 }
+            } else {
+                if(shouldLog) Log.info(`[RUNNER] ${creep.name} | pickup() returned true`)
             }
         } else {
+            if(shouldLog) Log.info(`[RUNNER] ${creep.name} | Mode 1: Deposit cycle`)
             if (!creep.memory.location || !Game.getObjectById(creep.memory.location))
-                creep.memory.location =  (roomU.getStorage(Game.spawns[creep.memory.city].room) as StructureStorage).id
+                creep.memory.location = Game.spawns[creep.memory.city].room.storage.id
             const target = Game.getObjectById(creep.memory.location)
             if(target.store.energy < 2000 || !rR.runController(creep))
                 rR.deposit(creep)
@@ -79,13 +106,32 @@ const rR = {
         
         const availablePullees = []
         for (const c of Tmp[roomName].potentialPullees) {
-            if (c.memory.destination && !c.memory.paired) {
+            // ? FIX: Validate ALL destination properties, not just existence
+            if (c.memory.destination 
+                && c.memory.destination.x !== undefined 
+                && c.memory.destination.y !== undefined 
+                && c.memory.destination.roomName
+                && !c.memory.paired) {
+                
+                // ? FIX: Don't tug creeps that are ALREADY at their destination!
+                // This prevents wasted tug cycles on creeps that spawned at their target location
+                if(c.pos.x === c.memory.destination.x 
+                    && c.pos.y === c.memory.destination.y 
+                    && c.pos.roomName === c.memory.destination.roomName){
+                    // Creep is already at destination, clear the destination flag
+                    c.memory.destination = null
+                    continue
+                }
+                
                 availablePullees.push(c)
             }
         }
         
+        Log.info(`[RUNNER] ${creep.name} | Found ${availablePullees.length} available pullees in ${roomName}`)
+        
         if (availablePullees.length > 0) {
             const pullee = availablePullees[0]
+            Log.info(`[RUNNER] ${creep.name} | Pairing with ${pullee.name} (${pullee.memory.role}) to ${pullee.memory.destination.roomName}`)
             creep.memory.tug = true
             creep.memory.pullee = pullee.id
             pullee.memory.paired = creep.id
@@ -96,6 +142,13 @@ const rR = {
         if (!creep.memory.resource) {
             return
         }
+        
+        // Validate room visibility before accessing storage
+        if(!Game.rooms[creep.memory.flag]){
+            motion.newMove(creep, new RoomPosition(25, 25, creep.memory.flag), 24)
+            return
+        }
+        
         if (creep.store.getUsedCapacity() > 0) {
             if (creep.memory.resource == RESOURCE_GHODIUM && creep.store.getUsedCapacity() >= SAFE_MODE_COST) {
                 if (creep.generateSafeMode(Game.rooms[creep.memory.flag].controller) == ERR_NOT_IN_RANGE) {
@@ -168,7 +221,7 @@ const rR = {
             }
         } else {
             if (!creep.memory.location || !Game.getObjectById(creep.memory.location))
-                creep.memory.location =  (roomU.getStorage(Game.spawns[creep.memory.city].room) as StructureStorage).id
+                creep.memory.location = Game.spawns[creep.memory.city].room.storage.id
             const target = Game.getObjectById(creep.memory.location)
             if(target.store.energy < 1500) return false
             if ( actions.withdraw(creep, target) == 1) {
@@ -179,9 +232,15 @@ const rR = {
     },
 
     pickup: function(creep: Creep) {
+        // DEBUG: Log entry
+        if(Game.time % 50 == 0){
+            Log.info("[runner.pickup] Called for " + creep.name + " with targetId: " + creep.memory.targetId)
+        }
+        
         if(creep.memory.targetId) {
             const target = Game.getObjectById(creep.memory.targetId)
             if(target){
+                let result
                 if(!(target instanceof Resource)) {
                     const storeTarget = target as AnyStoreStructure
                     let max = 0
@@ -192,11 +251,14 @@ const rR = {
                             maxResource = resource
                         }
                     }
-                    if(actions.withdraw(creep, target, maxResource) == 1)
-                        creep.memory.targetId = null
+                    result = actions.withdraw(creep, target, maxResource)
                 } else {
-                    if(actions.pick(creep, target) == 1)
-                        creep.memory.targetId = null
+                    result = actions.pick(creep, target)
+                }
+                
+                // Clear targetId on success or if target is depleted
+                if(result == 1 || result == ERR_NOT_ENOUGH_RESOURCES){
+                    creep.memory.targetId = null
                 }
                 return true
             } else {
@@ -204,7 +266,18 @@ const rR = {
             }
         }
         
+        // DEBUG: Log before getGoodPickups
+        if(Game.time % 50 == 0){
+            Log.info("[runner.pickup] Calling getGoodPickups for " + creep.name)
+        }
+        
         const goodLoads = cU.getGoodPickups(creep)
+        
+        // DEBUG: Log result
+        if(Game.time % 50 == 0){
+            Log.info("[runner.pickup] getGoodPickups returned " + goodLoads.length + " loads")
+        }
+        
         if(!goodLoads.length)
             return false
             
@@ -280,10 +353,10 @@ const rR = {
 
     deposit: function(creep: Creep){
         if (!creep.memory.location || !Game.getObjectById(creep.memory.location))
-            creep.memory.location =  (roomU.getStorage(Game.spawns[creep.memory.city].room) as StructureStorage).id
+            creep.memory.location = Game.spawns[creep.memory.city].room.storage.id
         const target = Game.getObjectById(creep.memory.location)
         if (actions.charge(creep, target) == ERR_FULL) 
-            creep.memory.location =  (roomU.getStorage(Game.spawns[creep.memory.city].room) as StructureStorage).id
+            creep.memory.location = Game.spawns[creep.memory.city].room.storage.id
     },
 
     parkRunner: function(creep: Creep) {
@@ -353,38 +426,55 @@ const rR = {
     runTug: function(creep: Creep){
         const pullee = Game.getObjectById(creep.memory.pullee)
         if(!pullee){
+            Log.info(`[TUG] ${creep.name} | Pullee not found, aborting tug`)
             creep.memory.tug = false
             creep.memory.pullee = null
             return false
         }
         
-        if(!pullee.memory.destination){
+        Log.info(`[TUG] ${creep.name} | Tugging ${pullee.name} at ${pullee.pos}`)
+        
+        // ? FIX: Comprehensive destination validation AND immediate RoomPosition creation
+        // Create destination IMMEDIATELY after validation to prevent race conditions
+        if(!pullee.memory.destination 
+            || pullee.memory.destination.x === undefined 
+            || pullee.memory.destination.y === undefined 
+            || !pullee.memory.destination.roomName){
+            Log.info(`[TUG] ${creep.name} | Invalid destination for ${pullee.name}, aborting`)
             creep.memory.tug = false
             creep.memory.pullee = null
             pullee.memory.paired = null
             return false
         }
+        
+        // ? FIX: Create destination object IMMEDIATELY after validation
+        // This prevents race conditions where destination could become null between validation and usage
+        const destination = new RoomPosition(pullee.memory.destination.x, pullee.memory.destination.y, pullee.memory.destination.roomName)
+        Log.info(`[TUG] ${creep.name} | Destination: ${destination}`)
         
         if(creep.ticksToLive == 1){
             pullee.memory.paired = null
             pullee.memory.destination = null
         }
-        if(creep.fatigue)
+        if(creep.fatigue){
+            Log.info(`[TUG] ${creep.name} | Fatigued, waiting`)
             return true
-        
-        const destination = new RoomPosition(pullee.memory.destination.x, pullee.memory.destination.y, pullee.memory.destination.roomName)
+        }
         
         if((roomU.isOnEdge(creep.pos) && roomU.isNearEdge(pullee.pos)) || (roomU.isOnEdge(pullee.pos) && roomU.isNearEdge(creep.pos))){
+            Log.info(`[TUG] ${creep.name} | Border tug mode`)
             rR.runBorderTug(creep, pullee, destination)
             return true
         }
         
         if(!pullee.pos.isNearTo(creep.pos)){
+            Log.info(`[TUG] ${creep.name} | Moving to pullee`)
             motion.newMove(creep, pullee.pos, 1)
             return true
         }
         
         if(pullee.pos.isEqualTo(destination)){
+            Log.info(`[TUG] ${creep.name} | Pullee reached destination, tug complete`)
             creep.memory.tug = false
             creep.memory.pullee = null
             pullee.memory.paired = null
@@ -393,6 +483,7 @@ const rR = {
         }
         
         if(creep.pos.isEqualTo(destination)){
+            Log.info(`[TUG] ${creep.name} | Runner at destination, final pull`)
             creep.move(pullee)
             creep.pull(pullee)
             pullee.move(creep)
@@ -401,6 +492,7 @@ const rR = {
             return true
         }
         
+        Log.info(`[TUG] ${creep.name} | Tugging to destination`)
         const range = pullee.memory.sourcePos && new RoomPosition(destination.x, destination.y, destination.roomName).isEqualTo(pullee.memory.sourcePos.x, pullee.memory.sourcePos.y) ? 1 : 0
         motion.newMove(creep, destination, range)
         creep.pull(pullee)
@@ -410,7 +502,8 @@ const rR = {
     },
 
     runBorderTug: function(creep, pullee, destination){
-        if(!destination || !destination.roomName){
+        // ? FIX: Validate destination properties before use
+        if(!destination || !destination.roomName || destination.x === undefined || destination.y === undefined){
             creep.memory.tug = false
             creep.memory.pullee = null
             if(pullee && pullee.memory){
@@ -506,6 +599,12 @@ const rR = {
             return
         }
         if (flag) {
+            // Validate room visibility before lookFor operations
+            if(!Game.rooms[flag.roomName]){
+                motion.newMove(creep, new RoomPosition(flag.x, flag.y, flag.roomName), 5)
+                return
+            }
+            
             const flagPos = new RoomPosition(flag.x, flag.y, flag.roomName)
             const resource = Game.rooms[flag.roomName].lookForAt(LOOK_RESOURCES, flagPos)
             if (resource.length){

@@ -22,11 +22,34 @@ const rM = {
             rM.nextSource(creep)
             return
         }
+        
+        // Try to get source - may be null if room is not visible
         const source = Game.getObjectById(creep.memory.source) as Source
+        
+        // If source is null, it means we don't have vision of the room
+        // Move towards sourcePos until we get vision
+        if(!source){
+            // Validate we have a valid sourcePos to move towards
+            if(!creep.memory.sourcePos || !creep.memory.sourcePos.roomName){
+                Log.error(`[remoteMiner] ${creep.name}: Missing sourcePos! Resetting...`)
+                creep.memory.source = null
+                creep.memory.sourcePos = null
+                rM.nextSource(creep)
+                return
+            }
+            
+            // Move towards the source position
+            const targetPos = new RoomPosition(
+                creep.memory.sourcePos.x, 
+                creep.memory.sourcePos.y, 
+                creep.memory.sourcePos.roomName
+            )
+            motion.newMove(creep, targetPos, 1)
+            return
+        }
+        
         cU.setMoveStatus(creep)
         rM.maybeMove(creep, source)
-        if(!source)
-            return
         if(creep.memory.construction && rM.build(creep, source))
             return
         if(creep.memory.link){
@@ -43,11 +66,12 @@ const rM = {
         } else if(creep.memory.container){
             const container = Game.getObjectById(creep.memory.container)
             if(container){
-                if(container.hits < container.hitsMax * 0.3 && creep.store.getUsedCapacity() > 0 && !creep.store.getFreeCapacity()){
+                const containerHitsRatio = container.hits / container.hitsMax
+                if(containerHitsRatio < 0.3 && creep.store.getUsedCapacity() > 0 && !creep.store.getFreeCapacity()){
                     creep.repair(container)
                 } else if(source.energy > 0 && (container.store.getFreeCapacity() > 0 || creep.store.getFreeCapacity() > 0)){
                     creep.harvest(source)
-                } else if (container.hits < container.hitsMax * 0.9 && creep.store.getUsedCapacity() > 0){
+                } else if (containerHitsRatio < 0.9 && creep.store.getUsedCapacity() > 0){
                     creep.repair(container)
                 }
             } else {
@@ -82,13 +106,43 @@ const rM = {
     },
 
     retreat: function(creep: Creep){
+        // Throttle awareness check to every 10 ticks unless damaged
         if (creep.memory.aware || creep.hits < creep.hitsMax || Game.time % 10 == 9) {
             creep.memory.aware = true
-            // if creep has a hostile within 15 spaces, become aware
-            const hostiles = _.filter(u.findHostileCreeps(creep.room), (c) => c.pos.getRangeTo(creep.pos) < 15)
-            // check nearby sourcekeeper lairs
-            const lair = _.find(creep.room.find(FIND_HOSTILE_STRUCTURES), (s) => s.structureType == STRUCTURE_KEEPER_LAIR && s.pos.getRangeTo(creep.pos) < 10) as StructureKeeperLair
-            const dangerousLair = lair && lair.ticksToSpawn < 20
+            
+            // Cache hostile check in Tmp
+            const roomName = creep.room.name
+            if (!Tmp[roomName]) {
+                Tmp[roomName] = {}
+            }
+            if (!Tmp[roomName].hostileCheck || Game.time % 5 == 0) {
+                const allHostiles = u.findHostileCreeps(creep.room)
+                Tmp[roomName].nearHostiles = []
+                for (const hostile of allHostiles) {
+                    if (hostile.pos.getRangeTo(creep.pos) < 15) {
+                        Tmp[roomName].nearHostiles.push(hostile)
+                    }
+                }
+                Tmp[roomName].hostileCheck = Game.time
+            }
+            const hostiles = Tmp[roomName].nearHostiles || []
+            
+            // Cache lair check
+            if (!Tmp[roomName].lairCheck || Game.time % 10 == 0) {
+                const structures = creep.room.find(FIND_HOSTILE_STRUCTURES)
+                let foundLair = null
+                for (const s of structures) {
+                    if (s.structureType == STRUCTURE_KEEPER_LAIR && s.pos.getRangeTo(creep.pos) < 10) {
+                        foundLair = s as StructureKeeperLair
+                        break
+                    }
+                }
+                Tmp[roomName].dangerLair = foundLair
+                Tmp[roomName].lairCheck = Game.time
+            }
+            const lair = Tmp[roomName].dangerLair as StructureKeeperLair | null | false
+            const dangerousLair = lair && typeof lair !== "boolean" && lair.ticksToSpawn < 20
+            
             //lose awareness if no hostiles or lairs
             if(hostiles.length == 0 && !dangerousLair && creep.hits == creep.hitsMax){
                 creep.memory.aware = false
@@ -97,7 +151,7 @@ const rM = {
             }
             // if creep has an enemy within 5 spaces, retreat
             const enemies = creep.pos.findInRange(FIND_HOSTILE_CREEPS, 5) as Array<Creep | Structure>
-            if(dangerousLair) {
+            if(dangerousLair && lair && typeof lair !== "boolean") {
                 enemies.push(lair)
             }
             if(enemies.length > 0){
@@ -110,7 +164,14 @@ const rM = {
 
     placeContainer: function(creep, source){
         const spawn = Game.spawns[creep.memory.city]
-        if(!spawn.memory.sources[source.id] || spawn.room.energyCapacityAvailable < 800 || Math.random() < 0.95)
+        
+        // Validate source exists in spawn memory
+        if(!spawn.memory.sources[source.id]){
+            Log.error(`[remoteMiner] placeContainer: Source ${source.id} not in spawn memory for ${spawn.name}`)
+            return
+        }
+        
+        if(spawn.room.energyCapacityAvailable < 800 || Math.random() < 0.95)
             return
         if(spawn.memory.sources[source.id][STRUCTURE_CONTAINER + "Pos"]){
             const pos = spawn.memory.sources[source.id][STRUCTURE_CONTAINER + "Pos"]
@@ -132,7 +193,7 @@ const rM = {
             creep.memory.construction = null
             return false
         }
-        if(creep.store.getUsedCapacity() > creep.store.getCapacity()/2){
+        if(creep.store.getUsedCapacity() > creep.store.getCapacity() * 0.5){
             creep.build(cSite)
         } else {
             creep.harvest(source)
@@ -142,19 +203,66 @@ const rM = {
 
     maybeMove: function(creep: Creep, source: Source){
         if(creep.memory.moveStatus == MoveStatus.STATIC){
-            if(!source){
-                creep.memory.destination = creep.memory.sourcePos
+            // STATIC miners (no MOVE parts) request pull from runners
+            // For STATIC miners, we need destination set for the tug system
+            if(!creep.memory.destination){
+                // Try to get destination from source if we have vision
+                if(source){
+                    const dest = rM.getDestination(creep, source)
+                    if(dest){
+                        creep.memory.destination = dest
+                        return
+                    }
+                }
+                
+                // If no source (no vision), try to calculate from spawn memory
+                const spawn = Game.spawns[creep.memory.city]
+                if(spawn && spawn.memory.sources && creep.memory.source){
+                    const sourceMemory = spawn.memory.sources[creep.memory.source]
+                    if(sourceMemory){
+                        const containerPos = sourceMemory[STRUCTURE_CONTAINER + "Pos"]
+                        if(containerPos){
+                            creep.memory.destination = new RoomPosition(
+                                Math.floor(containerPos/50), 
+                                containerPos%50, 
+                                creep.memory.sourcePos.roomName
+                            )
+                            return
+                        }
+                        // No container yet - use sourcePos as destination
+                        if(creep.memory.sourcePos){
+                            creep.memory.destination = new RoomPosition(
+                                creep.memory.sourcePos.x,
+                                creep.memory.sourcePos.y,
+                                creep.memory.sourcePos.roomName
+                            )
+                            return
+                        }
+                    }
+                }
+            }
+            
+            // Static miner waits for runner to pull them to destination
+            // No movement code here - runner.ts handles the tug
+            return
+        }
+        
+        // MOBILE miners (with MOVE parts) move themselves
+        if(!source){
+            // No vision - move towards sourcePos
+            if(!creep.memory.sourcePos || !creep.memory.sourcePos.roomName){
+                Log.error(`[remoteMiner] ${creep.name}: Invalid sourcePos for mobile miner!`)
                 return
             }
-            if(!creep.memory.destination 
-                || new RoomPosition(creep.memory.destination.x, creep.memory.destination.y, creep.memory.destination.roomName).isEqualTo(creep.memory.sourcePos.x, creep.memory.sourcePos.y))
-                creep.memory.destination = rM.getDestination(creep, source)
+            motion.newMove(creep, new RoomPosition(
+                creep.memory.sourcePos.x, 
+                creep.memory.sourcePos.y, 
+                creep.memory.sourcePos.roomName
+            ), 1)
             return
         }
-        if(!source){
-            motion.newMove(creep, new RoomPosition(creep.memory.sourcePos.x, creep.memory.sourcePos.y, creep.memory.sourcePos.roomName), 1)
-            return
-        }
+        
+        // We have vision of source - move to mining position
         if(!creep.memory.miningPos){
             creep.memory.miningPos = rM.getDestination(creep, source)
             if(!creep.memory.miningPos)
@@ -166,12 +274,17 @@ const rM = {
     },
 
     getLinkMiningPos: function(link, source){
-        for(let i = link.pos.x - 1; i <= link.pos.x + 1; i++){
-            for(let j = link.pos.y - 1; j <= link.pos.y + 1; j++){
-                const testPos = new RoomPosition(i, j, link.pos.roomName)
-                if(testPos.isNearTo(source) && !rM.isPositionBlockedMiner(testPos))
-                    return testPos
-            }
+        // Unroll nested loop for better performance
+        const offsets = [
+            [-1, -1], [0, -1], [1, -1],
+            [-1, 0], [0, 0], [1, 0],
+            [-1, 1], [0, 1], [1, 1]
+        ]
+        
+        for (const offset of offsets) {
+            const testPos = new RoomPosition(link.pos.x + offset[0], link.pos.y + offset[1], link.pos.roomName)
+            if(testPos.isNearTo(source) && !rM.isPositionBlockedMiner(testPos))
+                return testPos
         }
         return null
     },
@@ -199,27 +312,39 @@ const rM = {
             creep.memory.construction = containerSite.id
             return containerSite.pos
         }
-        //look for empty space to mine
-        for(let i = source.pos.x - 1; i <= source.pos.x + 1; i++){
-            for(let j = source.pos.y - 1;j <= source.pos.y + 1; j++){
-                if(!rM.isPositionBlockedMiner(new RoomPosition(i, j, source.pos.roomName)))
-                    return new RoomPosition(i, j, source.pos.roomName)
-            }
+        //look for empty space to mine - unroll loop
+        const offsets = [
+            [-1, -1], [0, -1], [1, -1],
+            [-1, 0], [0, 0], [1, 0],
+            [-1, 1], [0, 1], [1, 1]
+        ]
+        
+        for (const offset of offsets) {
+            const testPos = new RoomPosition(source.pos.x + offset[0], source.pos.y + offset[1], source.pos.roomName)
+            if(!rM.isPositionBlockedMiner(testPos))
+                return testPos
         }
     },
 
     findStruct: function(creep: Creep, source: Source, structureType, construction = false){
         const type = construction ? LOOK_CONSTRUCTION_SITES : LOOK_STRUCTURES
         const memory = Game.spawns[creep.memory.city].memory
-        if(!memory.sources[source.id])
+        
+        // Validate source exists in memory
+        if(!memory.sources[source.id]){
             return null
+        }
+        
         const structPos = memory.sources[source.id][structureType + "Pos"]
         if(structPos){
             const realPos = new RoomPosition(Math.floor(structPos/50), structPos%50, source.pos.roomName)
             const look = realPos.lookFor(type)
-            const structure = _.find(look, struct => struct.structureType == structureType && (!(struct instanceof OwnedStructure) || struct.my))
-            if(structure)
-                return structure
+            // Use simple loop instead of _.find
+            for (const struct of look) {
+                if (struct.structureType == structureType && (!("owner" in struct) || struct.my)) {
+                    return struct
+                }
+            }
         }
         return null
     },
@@ -228,7 +353,7 @@ const rM = {
         const look = roomPos.look()
         for(const lookObject of look){
             if((lookObject.type == LOOK_TERRAIN 
-                && lookObject[LOOK_TERRAIN] == "wall")//no constant for wall atm
+                && lookObject[LOOK_TERRAIN] == "wall")
                 || (lookObject.type == LOOK_STRUCTURES
                 && OBSTACLE_OBJECT_TYPES[lookObject[LOOK_STRUCTURES].structureType])
                 || (lookObject.type == LOOK_CREEPS
@@ -263,12 +388,34 @@ const rM = {
     nextSource: function(creep: Creep) {
         if(creep.memory.flag){
             const spawn = Game.spawns[creep.memory.city]
-            roomU.initializeSources(spawn)
-            creep.memory.source = creep.memory.flag as Id<Source>
-            creep.memory.sourcePos = spawn.memory.sources[creep.memory.source]
-            if(!creep.memory.sourcePos)
+            if(!spawn){
+                Log.error(`[remoteMiner] ${creep.name}: Spawn ${creep.memory.city} not found! Suiciding...`)
                 creep.suicide()
+                return
+            }
+            roomU.initializeSources(spawn)
+            
+            // Validate source exists in spawn memory
+            const sourceId = creep.memory.flag as Id<Source>
+            if(!spawn.memory.sources[sourceId]){
+                Log.error(`[remoteMiner] ${creep.name}: Source ${sourceId} not in spawn memory! Suiciding...`)
+                creep.suicide()
+                return
+            }
+            
+            // Validate sourcePos is a valid RoomPosition
+            const sourcePos = spawn.memory.sources[sourceId]
+            if(!sourcePos || typeof sourcePos !== "object" || !sourcePos.roomName || sourcePos.x === undefined || sourcePos.y === undefined){
+                Log.error(`[remoteMiner] ${creep.name}: Invalid sourcePos for ${sourceId} in ${spawn.name}! Suiciding...`)
+                delete spawn.memory.sources[sourceId]
+                creep.suicide()
+                return
+            }
+            
+            creep.memory.source = sourceId
+            creep.memory.sourcePos = sourcePos
         } else {
+            Log.error(`[remoteMiner] ${creep.name}: No flag assignment! Suiciding...`)
             creep.suicide()
         }
     }

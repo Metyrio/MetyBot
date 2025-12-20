@@ -69,6 +69,20 @@ function runCity(city, creeps: Creep[]){
 
     // Run all the creeps in this city
     _.forEach(creeps, (creep) => {
+        // Validate creep has a role before running
+        if(!creep.memory.role){
+            Log.error(`[runCity] Creep ${creep.name} in ${city} has no role! Suiciding...`)
+            creep.suicide()
+            return
+        }
+        
+        // Validate role exists in nameToRole
+        if(!nameToRole[creep.memory.role]){
+            Log.error(`[runCity] Creep ${creep.name} has invalid role ${creep.memory.role}! Suiciding...`)
+            creep.suicide()
+            return
+        }
+        
         nameToRole[creep.memory.role][0].run(creep)
     })
     
@@ -94,7 +108,6 @@ function updateCountsCity(city, creeps, rooms, claimRoom, unclaimRoom) {
 
     // Always update defender
     updateDefender(spawn, rcl, creeps)
-    updateQR(spawn, creeps)
 
     if(Game.time % 200 == 0){
         updateMilitary(city, memory, rooms, spawn, creeps)
@@ -144,16 +157,6 @@ function checkNukes(room){
         if(nukes.length){
             Game.notify("Nuclear launch detected in " + room.name, 720)
             Log.warning(`Nuclear launch detected in ${room.name}`)
-        }
-    }
-}
-
-function updateQR(spawn, creeps){
-    if(Game.time % 100 == 5){
-        const flag = spawn.name + "qrCode"
-        if(Memory.flags[flag]){
-            const creepsNeeded = _.sum(template.qrCoords, elem => elem.length)
-            cU.scheduleIfNeeded(cN.QR_CODE_NAME, creepsNeeded, false, spawn, creeps, flag)
         }
     }
 }
@@ -498,16 +501,42 @@ function updateTransporter(extensions, memory, creeps, structures: Structure[], 
 
 function updateUpgrader(city: string, controller: StructureController, memory: SpawnMemory, rcl8: boolean, creeps: Creep[], rcl: number) {
     const room = Game.spawns[city].room
+    const spawn = Game.spawns[city]
+    
+    // EMERGENCY MODE: Only active during DOWNGRADE events (RCL 5+ losing storage)
+    // Not for normal early game (RCL 1-4 without storage is expected)
+    const isDowngradeEmergency = rcl >= 5 && (!room.storage || (room.storage && room.storage.store.energy < 1000))
+    
     if (rcl8){
         const bucketThreshold = settings.bucket.upgrade + settings.bucket.range * cityFraction(room.name)
         const haveEnoughCpu = Game.cpu.bucket > bucketThreshold
         if (controller.ticksToDowngrade < CONTROLLER_DOWNGRADE[rcl]/2 
             || (controller.room.storage.store.energy > settings.energy.rcl8upgrade && haveEnoughCpu && settings.rcl8upgrade)){
-            cU.scheduleIfNeeded(cN.UPGRADER_NAME, 1, true, Game.spawns[city], creeps)
+            cU.scheduleIfNeeded(cN.UPGRADER_NAME, 1, true, spawn, creeps)
         }
     } else {
-        const builders = _.filter(creeps, c => c.memory.role == cN.BUILDER_NAME).length + (sq.getCounts(Game.spawns[city])[cN.BUILDER_NAME] || 0)
-        const bank = roomU.getStorage(room) as StructureStorage
+        // EMERGENCY MODE: Only for RCL 5+ downgrade situations
+        if(isDowngradeEmergency){
+            const upgraders = _.filter(creeps, c => c.memory.role == cN.UPGRADER_NAME).length
+            const queuedUpgraders = sq.getCounts(spawn)[cN.UPGRADER_NAME] || 0
+            
+            if(upgraders + queuedUpgraders == 0){
+                // CRITICAL: No upgraders during downgrade! Schedule with high priority and minimal budget
+                sq.schedule(spawn, cN.UPGRADER_NAME, false, null, 300, -100) // High priority (-100)
+                Log.info(`DOWNGRADE EMERGENCY: Spawning minimal upgrader in ${spawn.name} (RCL ${rcl}, storage < 1000)`)
+                return
+            } else if(upgraders + queuedUpgraders < 2 && controller.ticksToDowngrade < CONTROLLER_DOWNGRADE[rcl] * 0.5){
+                // Downgrade risk! Schedule second upgrader
+                sq.schedule(spawn, cN.UPGRADER_NAME, false, null, 300, -50)
+                Log.info(`DOWNGRADE EMERGENCY: Controller downgrade risk in ${spawn.name}, spawning 2nd upgrader`)
+                return
+            }
+        }
+        
+        // NORMAL MODE: Regular upgrader spawning logic
+        const builders = _.filter(creeps, c => c.memory.role == cN.BUILDER_NAME).length + (sq.getCounts(spawn)[cN.BUILDER_NAME] || 0)
+        const storage = roomU.getStorage(room)
+        const bank = storage as StructureStorage | StructureContainer
         if(!bank) return
         let money = bank.store[RESOURCE_ENERGY]
         const capacity = bank.store.getCapacity()
@@ -515,7 +544,7 @@ function updateUpgrader(city: string, controller: StructureController, memory: S
             money += capacity * 0.2
         if(capacity < CONTAINER_CAPACITY){
             if(!builders)
-                cU.scheduleIfNeeded(cN.UPGRADER_NAME,1, false, Game.spawns[city], creeps)
+                cU.scheduleIfNeeded(cN.UPGRADER_NAME,1, false, spawn, creeps)
             return
         }
         let storedEnergy = bank.store[RESOURCE_ENERGY]
@@ -537,9 +566,9 @@ function updateUpgrader(city: string, controller: StructureController, memory: S
             }
         }
         const upgradersNeeded = Math.min(upgradersRequested - builders, upgraderSpots)
-        cU.scheduleIfNeeded(cN.UPGRADER_NAME, upgradersNeeded, rcl >= 6, Game.spawns[city], creeps)
+        cU.scheduleIfNeeded(cN.UPGRADER_NAME, upgradersNeeded, rcl >= 6, spawn, creeps)
         if (controller.ticksToDowngrade < CONTROLLER_DOWNGRADE[rcl]/2){
-            cU.scheduleIfNeeded(cN.UPGRADER_NAME, 1, rcl >= 6, Game.spawns[city], creeps)
+            cU.scheduleIfNeeded(cN.UPGRADER_NAME, 1, rcl >= 6, spawn, creeps)
         }
     }
 }
@@ -727,7 +756,7 @@ function updateRunner(creeps: Creep[], spawn, extensions, memory, rcl, emergency
     }
     const miners = Tmp[roomName].runnerMiners
     
-    const minRunners = rcl < 7 ? 2 : 0
+    const minRunners = rcl < 7 ? 4 : 0
     const distances = _.map(miners, miner => PathFinder.search(spawn.pos, miner.pos).cost)
     let totalDistance = _.sum(distances)
     if(extensions < 10 && Object.keys(Game.rooms).length == 1) totalDistance = totalDistance * 0.8//for when there are no reservers
